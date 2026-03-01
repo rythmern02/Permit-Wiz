@@ -1,3 +1,5 @@
+![Rootstock Banner](https://raw.githubusercontent.com/rsksmart/devportal/main/rootstock-logo.png)
+
 # Permit-Wiz: Gasless Signature Tool for Rootstock 
 
 [![Rootstock](https://img.shields.io/badge/Rootstock-Ecosystem-orange?style=for-the-badge&logo=rootstock)](https://rootstock.io/)
