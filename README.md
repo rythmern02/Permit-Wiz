@@ -1,36 +1,72 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Permit-Wiz: Gasless Signature Tool for Rootstock 
+
+[![Rootstock](https://img.shields.io/badge/Rootstock-Ecosystem-orange?style=for-the-badge&logo=rootstock)](https://rootstock.io/)
+[![Next.js](https://img.shields.io/badge/Next.js-16-black?style=for-the-badge&logo=next.js)](https://nextjs.org/)
+[![Viem](https://img.shields.io/badge/Viem-wagmi-blue?style=for-the-badge)](https://viem.sh/)
+
+"Gasless" transactions (using RIF Relay) are a massive selling point for Rootstock, but debugging failed EIP-712 signatures—the dreaded `"Invalid Signature"` error—can be a nightmare for developers. A single mismatched chain ID, version string, or nonce will cause the entire transaction to revert.
+
+**Permit-Wiz** is a purpose-built developer tool that lets you generate, sign, and instantly verify ERC-2612 Permit payloads. It automatically extracts the exact DOMAIN_SEPARATOR from the smart contract, eliminating guesswork and helping you find bugs in seconds.
+
+## Features
+
+- 🔍 **Auto-Fetcher**: Input any token contract address. Permit-Wiz uses on-chain `eth_call`s to automatically pull the token's `name()`, `version()`, `decimals()`, and precisely what its current `nonces(owner)` is.
+- 🏗️ **Payload Builder**: A clean UI to construct your permit parameters (Spender, Value, Deadline) using the mathematically correct EIP-712 domain data parsed from the contract.
+- ✍️ **Signing Studio**: Prompts your connected web3 wallet (MetaMask, Rabby, etc.) to securely sign the exact Typed Data JSON.
+- ✅ **Verification Engine**: Instantly takes the generated `v`, `r`, and `s` signature components and mathematically recovers the signer's address via `verifyTypedData`. If it matches the Owner, your signature is guaranteed to work on-chain.
+- 💻 **Code Snippet Export**: Generates the exact **Solidity** (for smart contracts) and **JavaScript/TypeScript** (using Viem) snippets needed to execute your perfectly signed permit.
+
+## Tech Stack
+
+- **Frontend Core**: React 19 / Next.js 14
+- **Web3 Layer**: Viem & Wagmi (for checksum handling, EIP-712 hashing, and deterministic RPC calls)
+- **Styling**: Tailwind CSS & shadcn/ui
+- **Cryptography**: Native EIP-2612 Standard implementation / `ecrecover`
 
 ## Getting Started
 
-First, run the development server:
+### Prerequisites
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+- Node.js version `^20.0.0`
+- A Rootstock Mainnet or Testnet configured wallet (e.g., MetaMask).
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### Installation
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/your-username/permit-wiz.git
+   cd permit-wiz
+   ```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
 
-## Learn More
+3. Start the development server:
+   ```bash
+   npm run dev
+   ```
 
-To learn more about Next.js, take a look at the following resources:
+4. Open your browser and navigate to `http://localhost:3000`.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Testing on Rootstock Mainnet
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Because ERC-2612 wasn't heavily standardized until recently, older tokens on Rootstock (like RIF or DOC) may not implement the `nonces(owner)` function natively (unless wrapped/upgraded).
 
-## Deploy on Vercel
+**Known Working ERC-2612 Tokens for Testing:**
+- **stRIF (Staked RIF)**: `0x5db91e24BD32059584bbDb831A901f1199f3d459`
+- *Most modern DEX LP Tokens (e.g., Uniswap V3 position NFTs, SushiSwap V2 LPs)*
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+If you try a token that isn't compatible, the Auto-Fetcher will gracefully alert you: *"Failed to read nonces(owner). This token likely does not support ERC-2612 permit."*
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## 📖 How It Works Under the Hood
+
+Permit-Wiz solves the classic *"Why did my payload fail?"* problem through multi-layered fallback RPC calls:
+
+1. **Checksum Handling**: Adapts strictly to Rootstock's EIP-1191 chain-specific checksums.
+2. **Byte32 Fallbacks**: Some older DeFi tokens (MakerDAO-style) return `bytes32` strings instead of dynamic `string` for `name()` and `symbol()`. Permit-Wiz auto-detects and decodes these.
+3. **Upgradeable Proxies**: Transparent proxies on Rootstock can revert on simple view-calls. Permit-Wiz correctly detects initialization failures vs standard non-compliance.
+
+---
+*Built for the Rootstock Developer Ecosystem.* 🧡

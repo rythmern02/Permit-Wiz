@@ -1,65 +1,220 @@
-import Image from "next/image";
+"use client";
+
+import { useState } from "react";
+import { useAccount } from "wagmi";
+import type { Hex, Address } from "viem";
+import { ConnectButton } from "@/components/shared/ConnectButton";
+import { WizardStepper } from "@/components/permit/WizardStepper";
+import { PayloadForm } from "@/components/permit/PayloadForm";
+import { SigningStudio } from "@/components/permit/SigningStudio";
+import { VerificationBadge } from "@/components/permit/VerificationBadge";
+import { CodeExport } from "@/components/permit/CodeExport";
+import type { PermitDomain, PermitMessage } from "@/lib/eip712";
+import type { SplitSignature } from "@/hooks/useVerifyPermit";
+import type { TokenData } from "@/hooks/usePermitData";
+
+interface PermitState {
+  domain: PermitDomain | null;
+  message: PermitMessage | null;
+  tokenData: TokenData | null;
+  signature: Hex | null;
+  splitSig: SplitSignature | null;
+  tokenAddress: Address | null;
+}
 
 export default function Home() {
+  const { address, isConnected } = useAccount();
+  const [currentStep, setCurrentStep] = useState(1);
+  const [state, setState] = useState<PermitState>({
+    domain: null,
+    message: null,
+    tokenData: null,
+    signature: null,
+    splitSig: null,
+    tokenAddress: null,
+  });
+
+  const handlePayloadReady = (
+    domain: PermitDomain,
+    message: PermitMessage,
+    tokenData: TokenData,
+  ) => {
+    setState((s) => ({
+      ...s,
+      domain,
+      message,
+      tokenData,
+      tokenAddress: domain.verifyingContract,
+    }));
+    setCurrentStep(3);
+  };
+
+  const handleSigned = (signature: Hex) => {
+    setState((s) => ({ ...s, signature }));
+    setCurrentStep(4);
+  };
+
+  const handleReset = () => {
+    setState({
+      domain: null,
+      message: null,
+      tokenData: null,
+      signature: null,
+      splitSig: null,
+      tokenAddress: null,
+    });
+    setCurrentStep(1);
+  };
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <main className="relative min-h-screen overflow-hidden">
+      {/* Background Effects */}
+      <div className="pointer-events-none fixed inset-0">
+        <div className="absolute -left-40 -top-40 h-96 w-96 rounded-full bg-orange-500/5 blur-3xl" />
+        <div className="absolute -right-40 top-1/3 h-96 w-96 rounded-full bg-purple-500/5 blur-3xl" />
+        <div className="absolute -bottom-40 left-1/3 h-96 w-96 rounded-full bg-amber-500/5 blur-3xl" />
+      </div>
+
+      <div className="relative mx-auto max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
+        {/* Header */}
+        <header className="mb-10">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-orange-500 to-amber-500 shadow-lg shadow-orange-500/25">
+                  <svg
+                    className="h-5 w-5 text-white"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"
+                    />
+                  </svg>
+                </div>
+                <div>
+                  <h1 className="text-2xl font-bold tracking-tight">
+                    Permit-Wiz
+                  </h1>
+                  <p className="text-sm text-muted-foreground">
+                    Gasless Signature Tool for Rootstock
+                  </p>
+                </div>
+              </div>
+            </div>
+            <ConnectButton />
+          </div>
+
+          <p className="mt-4 text-sm leading-relaxed text-muted-foreground/80">
+            Generate, sign, and verify{" "}
+            <span className="text-foreground font-medium">ERC-2612 Permit</span>{" "}
+            payloads instantly. Debug &quot;Invalid Signature&quot; errors by
+            inspecting domain data, nonces, and recovered addresses.
           </p>
+        </header>
+
+        {/* Wizard Steps */}
+        <div className="mb-8 rounded-2xl border border-border/30 bg-card/30 p-4 backdrop-blur-sm">
+          <WizardStepper
+            currentStep={currentStep}
+            onStepClick={(step) => {
+              if (step < currentStep) setCurrentStep(step);
+            }}
+          />
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        {/* Step Content */}
+        <div className="space-y-6">
+          {!isConnected && (
+            <div className="rounded-2xl border border-border/30 bg-card/30 p-8 text-center backdrop-blur-sm">
+              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-muted/30">
+                <svg
+                  className="h-8 w-8 text-muted-foreground/50"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M21 12a2.25 2.25 0 00-2.25-2.25H15a3 3 0 11-6 0H5.25A2.25 2.25 0 003 12m18 0v6a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 18v-6m18 0V9M3 12V9m18 0a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 9m18 0V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v3"
+                  />
+                </svg>
+              </div>
+              <h2 className="text-lg font-semibold">Connect Your Wallet</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Connect a wallet on Rootstock Mainnet or Testnet to begin.
+              </p>
+            </div>
+          )}
+
+          {isConnected && (currentStep === 1 || currentStep === 2) && (
+            <PayloadForm onPayloadReady={handlePayloadReady} />
+          )}
+
+          {isConnected &&
+            currentStep === 3 &&
+            state.domain &&
+            state.message && (
+              <SigningStudio
+                domain={state.domain}
+                message={state.message}
+                onSigned={handleSigned}
+              />
+            )}
+
+          {isConnected &&
+            currentStep === 4 &&
+            state.signature &&
+            state.domain &&
+            state.message &&
+            address && (
+              <div className="space-y-6">
+                <VerificationBadge
+                  signature={state.signature}
+                  domain={state.domain}
+                  message={state.message}
+                  owner={address}
+                  onVerified={({ splitSignature }) => {
+                    setState((s) => ({ ...s, splitSig: splitSignature }));
+                  }}
+                />
+
+                {state.tokenData && state.tokenAddress && state.splitSig && (
+                  <CodeExport
+                    domain={state.domain}
+                    message={state.message}
+                    signature={state.signature}
+                    splitSig={state.splitSig}
+                    tokenData={state.tokenData}
+                    tokenAddress={state.tokenAddress}
+                  />
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleReset}
+                  className="w-full rounded-xl border border-border/30 bg-card/30 py-3 text-sm font-medium text-muted-foreground backdrop-blur-sm transition-colors hover:bg-card/50 hover:text-foreground"
+                >
+                  ← Start New Permit
+                </button>
+              </div>
+            )}
         </div>
-      </main>
-    </div>
+
+        {/* Footer */}
+        <footer className="mt-12 text-center text-xs text-muted-foreground/50">
+          <p>
+            Built for the <span className="text-orange-400/70">Rootstock</span>{" "}
+            ecosystem &middot; EIP-2612 &middot; EIP-712
+          </p>
+        </footer>
+      </div>
+    </main>
   );
 }
