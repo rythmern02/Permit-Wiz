@@ -36,6 +36,7 @@ export function useVerifyPermit() {
       domain: PermitDomain,
       message: PermitMessage,
       expectedOwner: Address,
+      abortSignal?: AbortSignal,
     ) => {
       setIsVerifying(true);
       setError(null);
@@ -57,6 +58,8 @@ export function useVerifyPermit() {
         const isMatch =
           recoveredAddress.toLowerCase() === expectedOwner.toLowerCase();
 
+        if (abortSignal?.aborted) return;
+
         setResult({
           recoveredAddress,
           isMatch,
@@ -67,13 +70,16 @@ export function useVerifyPermit() {
           },
         });
       } catch (err) {
+        if (abortSignal?.aborted) return;
         setError(
           err instanceof Error
             ? `Verification failed: ${err.message}`
             : "Unknown verification error",
         );
       } finally {
-        setIsVerifying(false);
+        if (!abortSignal?.aborted) {
+          setIsVerifying(false);
+        }
       }
     },
     [],

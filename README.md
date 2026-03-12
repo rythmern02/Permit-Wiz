@@ -20,7 +20,7 @@
 
 ## Tech Stack
 
-- **Frontend Core**: React 19 / Next.js 14
+- **Frontend Core**: React 19 / Next.js 16
 - **Web3 Layer**: Viem & Wagmi (for checksum handling, EIP-712 hashing, and deterministic RPC calls)
 - **Styling**: Tailwind CSS & shadcn/ui
 - **Cryptography**: Native EIP-2612 Standard implementation / `ecrecover`

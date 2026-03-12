@@ -10,6 +10,7 @@ import {
   NonceAlternativesABI,
 } from "@/abis/IERC20Permit";
 import { buildDomain, type PermitDomain } from "@/lib/eip712";
+import { keccak256, encodeAbiParameters, parseAbiParameters } from "viem";
 
 export interface TokenData {
   name: string;
@@ -29,6 +30,9 @@ export interface UsePermitDataReturn {
 }
 
 const LOG_PREFIX = "[PermitWiz]";
+
+// Simple module-level cache
+const tokenDataCache = new Map<string, { td: TokenData, warnings: string[], domain: PermitDomain }>();
 
 /**
  * Decode a bytes32 value to a UTF-8 string (strips null bytes).
@@ -51,12 +55,12 @@ async function tryReadWithFallback<T>(
   address: Address,
   primary: {
     functionName: string;
-    abi: readonly unknown[];
+    abi: any;
     args?: readonly unknown[];
   },
   fallbacks: Array<{
     functionName: string;
-    abi: readonly unknown[];
+    abi: any;
     args?: readonly unknown[];
     transform?: (v: unknown) => T;
     label: string;
@@ -69,16 +73,18 @@ async function tryReadWithFallback<T>(
   try {
     const result = await client.readContract({
       address,
-      abi: primary.abi as never,
-      functionName: primary.functionName as never,
-      args: primary.args as never,
+      abi: primary.abi,
+      functionName: primary.functionName,
+      args: primary.args,
     });
     return { value: result as T, warning: null, failed: false };
   } catch (primaryErr) {
-    console.warn(
-      `${LOG_PREFIX} ⚠️ Primary ${fieldName}() call failed, trying fallbacks...`,
-      primaryErr,
-    );
+    if (process.env.NODE_ENV !== "production") {
+      console.warn(
+        `${LOG_PREFIX} ⚠️ Primary ${fieldName}() call failed, trying fallbacks...`,
+        primaryErr,
+      );
+    }
   }
 
   // Try each fallback
@@ -86,9 +92,9 @@ async function tryReadWithFallback<T>(
     try {
       const result = await client.readContract({
         address,
-        abi: fb.abi as never,
-        functionName: fb.functionName as never,
-        args: fb.args as never,
+        abi: fb.abi,
+        functionName: fb.functionName,
+        args: fb.args,
       });
       const value = fb.transform ? fb.transform(result) : (result as T);
       return { value, warning: fb.label, failed: false };
@@ -113,16 +119,21 @@ export function usePermitData(
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
 
+  // to guard against race conditions
+  const [runId, setRunId] = useState(0);
+
   const fetchTokenData = useCallback(async () => {
     if (!tokenAddress || !ownerAddress || !publicClient) {
-      console.error(
-        `${LOG_PREFIX} ❌ Cannot fetch: missing address or client`,
-        {
-          tokenAddress,
-          ownerAddress,
-          hasClient: !!publicClient,
-        },
-      );
+      if (process.env.NODE_ENV !== "production") {
+        console.error(
+          `${LOG_PREFIX} ❌ Cannot fetch: missing address or client`,
+          {
+            tokenAddress,
+            ownerAddress,
+            hasClient: !!publicClient,
+          },
+        );
+      }
       return;
     }
 
@@ -132,117 +143,137 @@ export function usePermitData(
     setTokenData(null);
     setDomain(null);
 
+    const currentRunId = Date.now();
+    setRunId(currentRunId);
+
+    const cacheKey = `${chainId}-${tokenAddress.toLowerCase()}-${ownerAddress.toLowerCase()}`;
+    if (tokenDataCache.has(cacheKey)) {
+      const cached = tokenDataCache.get(cacheKey)!;
+      setTokenData(cached.td);
+      setDomain(cached.domain);
+      setWarnings(cached.warnings);
+      setIsLoading(false);
+      return;
+    }
+
     const newWarnings: string[] = [];
 
-    console.log(
-      `${LOG_PREFIX} 🔍 Fetching token data for ${tokenAddress} on chain ${chainId}...`,
-    );
+    if (process.env.NODE_ENV !== "production") {
+      console.log(
+        `${LOG_PREFIX} 🔍 Fetching token data for ${tokenAddress} on chain ${chainId}...`,
+      );
+    }
 
     try {
-      // Step 1: Verify the contract exists (has code deployed)
-      const code = await publicClient.getCode({ address: tokenAddress });
-      if (!code || code === "0x") {
-        const msg =
-          "No contract found at this address. Please verify the address and the connected network.";
-        console.error(`${LOG_PREFIX} ❌ ${msg}`, {
-          address: tokenAddress,
-          chainId,
-        });
-        setError(msg);
-        setIsLoading(false);
-        return;
-      }
-      console.log(
-        `${LOG_PREFIX} ✓ Contract exists at ${tokenAddress} (${code.length} bytes of code)`,
-      );
+      // Parallelize RPC calls using Promise.all where possible
+      const [
+        nameResult,
+        symbolResult,
+        decimalsResult,
+        nonceResult,
+        versionResult,
+        code
+      ] = await Promise.all([
+        tryReadWithFallback<string>(
+          publicClient,
+          tokenAddress,
+          { functionName: "name", abi: IERC20PermitABI },
+          [
+            {
+               functionName: "name",
+               abi: ERC20Bytes32ABI,
+               transform: (v) => decodeBytes32String(v as `0x${string}`),
+               label: "Token returns bytes32 for name() — decoded successfully.",
+            },
+          ],
+          "name",
+        ),
+        tryReadWithFallback<string>(
+          publicClient,
+          tokenAddress,
+          { functionName: "symbol", abi: IERC20PermitABI },
+          [
+            {
+               functionName: "symbol",
+               abi: ERC20Bytes32ABI,
+               transform: (v) => decodeBytes32String(v as `0x${string}`),
+               label: "Token returns bytes32 for symbol() — decoded successfully.",
+            },
+          ],
+          "symbol",
+        ),
+        tryReadWithFallback<number>(
+          publicClient,
+          tokenAddress,
+          { functionName: "decimals", abi: IERC20PermitABI },
+          [],
+          "decimals",
+        ),
+        tryReadWithFallback<bigint>(
+          publicClient,
+          tokenAddress,
+          { functionName: "nonces", abi: IERC20PermitABI, args: [ownerAddress] },
+          [
+             {
+               functionName: "_nonces",
+               abi: NonceAlternativesABI,
+               args: [ownerAddress],
+               label: "Token uses _nonces() instead of nonces().",
+             },
+             {
+               functionName: "getNonce",
+               abi: NonceAlternativesABI,
+               args: [ownerAddress],
+               label: "Token uses getNonce() instead of nonces().",
+             },
+          ],
+          "nonces",
+        ),
+        tryReadWithFallback<string>(
+          publicClient,
+          tokenAddress,
+          { functionName: "version", abi: IERC20PermitABI },
+          [],
+          "version",
+        ),
+        publicClient.getCode({ address: tokenAddress })
+      ]);
 
-      // Step 2: Fetch name with bytes32 fallback
-      const nameResult = await tryReadWithFallback<string>(
-        publicClient,
-        tokenAddress,
-        { functionName: "name", abi: IERC20PermitABI },
-        [
-          {
-            functionName: "name",
-            abi: ERC20Bytes32ABI,
-            transform: (v) => decodeBytes32String(v as `0x${string}`),
-            label: "Token returns bytes32 for name() — decoded successfully.",
-          },
-        ],
-        "name",
-      );
+      setRunId((latestRunId) => {
+        if (latestRunId !== currentRunId) return latestRunId;
 
-      // Step 3: Fetch symbol with bytes32 fallback
-      const symbolResult = await tryReadWithFallback<string>(
-        publicClient,
-        tokenAddress,
-        { functionName: "symbol", abi: IERC20PermitABI },
-        [
-          {
-            functionName: "symbol",
-            abi: ERC20Bytes32ABI,
-            transform: (v) => decodeBytes32String(v as `0x${string}`),
-            label: "Token returns bytes32 for symbol() — decoded successfully.",
-          },
-        ],
-        "symbol",
-      );
+        (async () => {
+          if (!code || code === "0x") {
+            const msg =
+              "No contract found at this address. Please verify the address and the connected network.";
+            console.error(`${LOG_PREFIX} ❌ ${msg}`, {
+              address: tokenAddress,
+              chainId,
+            });
+            setError(msg);
+            setIsLoading(false);
+            return;
+          }
+          console.log(
+            `${LOG_PREFIX} ✓ Contract exists at ${tokenAddress} (${code.length} bytes of code)`,
+          );
 
-      // Step 4: Fetch decimals
-      const decimalsResult = await tryReadWithFallback<number>(
-        publicClient,
-        tokenAddress,
-        { functionName: "decimals", abi: IERC20PermitABI },
-        [],
-        "decimals",
-      );
-
-      // Step 5: Fetch nonces with alternative function name fallbacks
-      const nonceResult = await tryReadWithFallback<bigint>(
-        publicClient,
-        tokenAddress,
-        { functionName: "nonces", abi: IERC20PermitABI, args: [ownerAddress] },
-        [
-          {
-            functionName: "_nonces",
-            abi: NonceAlternativesABI,
-            args: [ownerAddress],
-            label: "Token uses _nonces() instead of nonces().",
-          },
-          {
-            functionName: "getNonce",
-            abi: NonceAlternativesABI,
-            args: [ownerAddress],
-            label: "Token uses getNonce() instead of nonces().",
-          },
-        ],
-        "nonces",
-      );
-
-      // Step 6: Fetch version (optional, defaults to "1")
-      const versionResult = await tryReadWithFallback<string>(
-        publicClient,
-        tokenAddress,
-        { functionName: "version", abi: IERC20PermitABI },
-        [],
-        "version",
-      );
-
-      // Step 7: Check DOMAIN_SEPARATOR existence (optional validation)
-      let hasDomainSeparator = false;
-      try {
-        await publicClient.readContract({
-          address: tokenAddress,
-          abi: IERC20PermitABI,
-          functionName: "DOMAIN_SEPARATOR",
-        });
-        hasDomainSeparator = true;
-        console.log(`${LOG_PREFIX} ✓ DOMAIN_SEPARATOR() exists`);
-      } catch {
-        console.warn(
-          `${LOG_PREFIX} ⚠️ DOMAIN_SEPARATOR() not found or reverted`,
-        );
-      }
+          let hasDomainSeparator = false;
+          let contractDomainSeparator: string | null = null;
+          try {
+            const returnedDs = await publicClient.readContract({
+              address: tokenAddress,
+              abi: IERC20PermitABI,
+              functionName: "DOMAIN_SEPARATOR",
+            });
+            hasDomainSeparator = true;
+            contractDomainSeparator = returnedDs as string;
+            console.log(`${LOG_PREFIX} ✓ DOMAIN_SEPARATOR() exists`);
+          } catch {
+            console.warn(
+              `${LOG_PREFIX} ⚠️ DOMAIN_SEPARATOR() not found or reverted`,
+            );
+          }
 
       // --- Evaluate results ---
 
@@ -255,7 +286,7 @@ export function usePermitData(
         console.error(`${LOG_PREFIX} ❌ ${msg}`, { address: tokenAddress });
         setError(msg);
         setIsLoading(false);
-        return;
+        return latestRunId;
       }
 
       // Name: use result or fallback
@@ -303,7 +334,7 @@ export function usePermitData(
           setError(msg);
         }
         setIsLoading(false);
-        return;
+        return latestRunId;
       }
       const nonce = nonceResult.value ?? BigInt(0);
       if (nonceResult.warning) {
@@ -320,7 +351,7 @@ export function usePermitData(
         );
       }
 
-      if (version !== "1") {
+      if (version !== "1" && process.env.NODE_ENV !== "production") {
         console.log(
           `${LOG_PREFIX} ℹ️ Non-standard version detected: "${version}"`,
         );
@@ -337,19 +368,55 @@ export function usePermitData(
       setTokenData(td);
 
       const domainObj = buildDomain(name, version, chainId, tokenAddress);
+      
+      if (hasDomainSeparator && contractDomainSeparator) {
+        const computedDs = keccak256(
+          encodeAbiParameters(
+            parseAbiParameters([
+              "bytes32",
+              "bytes32",
+              "bytes32",
+              "uint256",
+              "address"
+            ]),
+            [
+              keccak256(new TextEncoder().encode("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)")),
+              keccak256(new TextEncoder().encode(name)),
+              keccak256(new TextEncoder().encode(version)),
+              BigInt(chainId),
+              tokenAddress
+            ]
+          )
+        );
+        if (computedDs.toLowerCase() !== contractDomainSeparator.toLowerCase()) {
+           newWarnings.push(
+             `DOMAIN_SEPARATOR mismatch! Computed: ${computedDs.substring(0, 10)}..., Contract: ${contractDomainSeparator.substring(0, 10)}... The version or name string may be incorrect.`
+           );
+        }
+      }
+
       setDomain(domainObj);
 
       setWarnings(newWarnings);
-      console.log(`${LOG_PREFIX} ✅ Token fetched successfully:`, {
-        name,
-        symbol,
-        decimals,
-        version,
-        nonce: nonce.toString(),
-        chainId,
-        hasDomainSeparator,
-        warnings: newWarnings.length,
-      });
+      tokenDataCache.set(cacheKey, { td, warnings: newWarnings, domain: domainObj });
+
+      if (process.env.NODE_ENV !== "production") {
+        console.log(`${LOG_PREFIX} ✅ Token fetched successfully:`, {
+          name,
+          symbol,
+          decimals,
+          version,
+          nonce: nonce.toString(),
+          chainId,
+          hasDomainSeparator,
+          warnings: newWarnings.length,
+        });
+      }
+
+      setIsLoading(false);
+     })();
+     return latestRunId;
+    });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       console.error(
@@ -359,7 +426,6 @@ export function usePermitData(
       setError(
         `Failed to read contract data: ${msg}. Check the address and ensure you're on the correct network.`,
       );
-    } finally {
       setIsLoading(false);
     }
   }, [tokenAddress, ownerAddress, publicClient, chainId]);

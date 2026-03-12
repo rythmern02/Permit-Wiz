@@ -19,7 +19,7 @@ import {
   Copy,
   CheckCircle2,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 
 interface VerificationBadgeProps {
@@ -42,20 +42,42 @@ export function VerificationBadge({
   const { result, isVerifying, error, verify } = useVerifyPermit();
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
+  const onVerifiedRef = useRef(onVerified);
   useEffect(() => {
-    verify(signature, domain, message, owner);
+    onVerifiedRef.current = onVerified;
+  }, [onVerified]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    verify(signature, domain, message, owner, controller.signal);
+    return () => controller.abort();
   }, [signature, domain, message, owner, verify]);
 
   useEffect(() => {
-    if (result && onVerified) {
-      onVerified({ splitSignature: result.splitSignature });
+    if (result && onVerifiedRef.current) {
+      onVerifiedRef.current({ splitSignature: result.splitSignature });
     }
-  }, [result, onVerified]);
+  }, [result]);
+
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
 
   const copyToClipboard = async (text: string, field: string) => {
-    await navigator.clipboard.writeText(text);
-    setCopiedField(field);
-    setTimeout(() => setCopiedField(null), 2000);
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard) {
+        await navigator.clipboard.writeText(text);
+        setCopiedField(field);
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        timeoutRef.current = setTimeout(() => setCopiedField(null), 2000);
+      }
+    } catch (err) {
+      console.error("Failed to copy code to clipboard", err);
+    }
   };
 
   if (isVerifying) {

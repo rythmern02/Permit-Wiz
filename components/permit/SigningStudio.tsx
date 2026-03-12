@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useSignTypedData, useAccount, useSwitchChain } from "wagmi";
+import { useState, useMemo, useEffect, useRef } from "react";
+import { useSignTypedData, useAccount, useSwitchChain, useConfig } from "wagmi";
 import type { Hex } from "viem";
 import {
   Card,
@@ -39,19 +39,34 @@ export function SigningStudio({
   onSigned,
 }: SigningStudioProps) {
   const { chainId: accountChainId } = useAccount();
-  const { switchChain } = useSwitchChain();
+  const { switchChainAsync } = useSwitchChain();
   const [copied, setCopied] = useState(false);
   const [showPayload, setShowPayload] = useState(true);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const { signTypedData, isPending, error, reset } = useSignTypedData();
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
 
-  const typedData = buildTypedData(domain, message);
+  const { signTypedData, isPending: isSignPending, error, reset } = useSignTypedData();
+  const [isSwitching, setIsSwitching] = useState(false);
+  const isPending = isSignPending || isSwitching;
+
+  const typedData = useMemo(() => buildTypedData(domain, message), [domain, message]);
   const isChainMismatch = accountChainId !== domain.chainId;
 
-  const handleSign = () => {
+  const handleSign = async () => {
     if (isChainMismatch) {
-      switchChain({ chainId: domain.chainId as 30 | 31 });
-      return;
+      try {
+        setIsSwitching(true);
+        await switchChainAsync({ chainId: domain.chainId as 30 | 31 });
+      } catch (err) {
+        setIsSwitching(false);
+        return;
+      }
+      setIsSwitching(false);
     }
 
     reset();
@@ -75,7 +90,7 @@ export function SigningStudio({
     );
   };
 
-  const payloadJson = JSON.stringify(
+  const payloadJson = useMemo(() => JSON.stringify(
     {
       domain,
       types: typedData.types,
@@ -89,12 +104,21 @@ export function SigningStudio({
     },
     null,
     2,
-  );
+  ), [domain, typedData, message]);
 
   const copyPayload = async () => {
-    await navigator.clipboard.writeText(payloadJson);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard) {
+        await navigator.clipboard.writeText(payloadJson);
+        setCopied(true);
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        timeoutRef.current = setTimeout(() => setCopied(false), 2000);
+      }
+    } catch (err) {
+      if (process.env.NODE_ENV !== "production") {
+        console.error("Failed to copy payload json", err);
+      }
+    }
   };
 
   // Parse error messages for friendly display

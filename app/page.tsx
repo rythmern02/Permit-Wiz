@@ -3,15 +3,29 @@
 import { useState } from "react";
 import { useAccount } from "wagmi";
 import type { Hex, Address } from "viem";
+import dynamic from "next/dynamic";
 import { ConnectButton } from "@/components/shared/ConnectButton";
 import { WizardStepper } from "@/components/permit/WizardStepper";
 import { PayloadForm } from "@/components/permit/PayloadForm";
-import { SigningStudio } from "@/components/permit/SigningStudio";
-import { VerificationBadge } from "@/components/permit/VerificationBadge";
-import { CodeExport } from "@/components/permit/CodeExport";
 import type { PermitDomain, PermitMessage } from "@/lib/eip712";
 import type { SplitSignature } from "@/hooks/useVerifyPermit";
 import type { TokenData } from "@/hooks/usePermitData";
+import { useCallback } from "react";
+
+const SigningStudio = dynamic(
+  () => import("@/components/permit/SigningStudio").then((mod) => mod.SigningStudio),
+  { ssr: false }
+);
+
+const VerificationBadge = dynamic(
+  () => import("@/components/permit/VerificationBadge").then((mod) => mod.VerificationBadge),
+  { ssr: false }
+);
+
+const CodeExport = dynamic(
+  () => import("@/components/permit/CodeExport").then((mod) => mod.CodeExport),
+  { ssr: false }
+);
 
 interface PermitState {
   domain: PermitDomain | null;
@@ -65,6 +79,10 @@ export default function Home() {
     });
     setCurrentStep(1);
   };
+
+  const handleVerified = useCallback(({ splitSignature }: { splitSignature: SplitSignature }) => {
+    setState((s) => ({ ...s, splitSig: splitSignature }));
+  }, []);
 
   return (
     <main className="relative min-h-screen overflow-hidden">
@@ -154,7 +172,10 @@ export default function Home() {
           )}
 
           {isConnected && (currentStep === 1 || currentStep === 2) && (
-            <PayloadForm onPayloadReady={handlePayloadReady} />
+            <PayloadForm 
+               onPayloadReady={handlePayloadReady} 
+               onStepChange={(stepId) => setCurrentStep(stepId === "fetch" ? 1 : 2)}
+            />
           )}
 
           {isConnected &&
@@ -180,9 +201,7 @@ export default function Home() {
                   domain={state.domain}
                   message={state.message}
                   owner={address}
-                  onVerified={({ splitSignature }) => {
-                    setState((s) => ({ ...s, splitSig: splitSignature }));
-                  }}
+                  onVerified={handleVerified}
                 />
 
                 {state.tokenData && state.tokenAddress && state.splitSig && (

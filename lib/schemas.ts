@@ -17,11 +17,11 @@ export const permitFormSchema = z.object({
     .refine((val) => {
       try {
         const num = parseFloat(val);
-        return num > 0;
+        return num >= 0;
       } catch {
         return false;
       }
-    }, "Value must be a positive number"),
+    }, "Value must be a positive number or zero"),
   deadline: z
     .string()
     .min(1, "Deadline is required")

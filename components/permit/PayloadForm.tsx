@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { usePermitData, type TokenData } from "@/hooks/usePermitData";
+import { permitFormSchema } from "@/lib/schemas";
 import type { PermitDomain, PermitMessage } from "@/lib/eip712";
 import {
   Search,
@@ -33,9 +34,10 @@ interface PayloadFormProps {
     message: PermitMessage,
     tokenData: TokenData,
   ) => void;
+  onStepChange?: (step: "fetch" | "build") => void;
 }
 
-export function PayloadForm({ onPayloadReady }: PayloadFormProps) {
+export function PayloadForm({ onPayloadReady, onStepChange }: PayloadFormProps) {
   const { address } = useAccount();
   const [tokenAddress, setTokenAddress] = useState("");
   const [step, setStep] = useState<"fetch" | "build">("fetch");
@@ -44,6 +46,7 @@ export function PayloadForm({ onPayloadReady }: PayloadFormProps) {
   const [spender, setSpender] = useState("");
   const [value, setValue] = useState("");
   const [deadline, setDeadline] = useState("");
+  const [buildError, setBuildError] = useState<string | null>(null);
 
   const validTokenAddr = isAddress(tokenAddress.trim(), { strict: false })
     ? getAddress(tokenAddress.trim())
@@ -64,10 +67,14 @@ export function PayloadForm({ onPayloadReady }: PayloadFormProps) {
   };
 
   const handleBuildPayload = () => {
+    setBuildError(null);
     if (!domain || !tokenData || !address) return;
 
-    const isValidSpender = /^0x[a-fA-F0-9]{40}$/.test(spender.trim());
-    if (!isValidSpender) return;
+    const parsed = permitFormSchema.safeParse({ spender, value, deadline });
+    if (!parsed.success) {
+      setBuildError(parsed.error.issues[0].message);
+      return;
+    }
 
     try {
       const rawValue = parseUnits(value, tokenData.decimals);
@@ -83,26 +90,20 @@ export function PayloadForm({ onPayloadReady }: PayloadFormProps) {
 
       onPayloadReady(domain, message, tokenData);
     } catch {
-      // value parse error handled by UI
+      setBuildError(`Invalid value format for token with ${tokenData.decimals} decimals.`);
     }
   };
 
   // Determine if build form is valid
-  const isValidSpender = /^0x[a-fA-F0-9]{40}$/.test(spender);
-  const isValidValue = (() => {
-    try {
-      return value.length > 0 && parseFloat(value) > 0;
-    } catch {
-      return false;
-    }
-  })();
-  const isValidDeadline = (() => {
+  const validation = permitFormSchema.safeParse({ spender, value, deadline });
+  const isValidSpender = spender.length > 0 && (validation.success || !validation.error.issues.some(i => i.path.includes("spender")));
+  const isValidValue = value.length > 0 && (validation.success || !validation.error.issues.some(i => i.path.includes("value")));
+  const isValidDeadline = deadline.length > 0 && (() => {
     const d = parseInt(deadline, 10);
     return !isNaN(d) && d > Math.floor(Date.now() / 1000);
   })();
 
-  const canBuild =
-    isValidSpender && isValidValue && isValidDeadline && domain && tokenData;
+  const canBuild = validation.success && isValidDeadline && domain && tokenData;
 
   return (
     <div className="space-y-6">
@@ -129,6 +130,7 @@ export function PayloadForm({ onPayloadReady }: PayloadFormProps) {
                 onChange={(e) => {
                   setTokenAddress(e.target.value);
                   setStep("fetch");
+                  onStepChange?.("fetch");
                 }}
                 className="font-mono text-sm"
               />
@@ -205,7 +207,10 @@ export function PayloadForm({ onPayloadReady }: PayloadFormProps) {
 
               {step === "fetch" && (
                 <Button
-                  onClick={() => setStep("build")}
+                  onClick={() => {
+                    setStep("build");
+                    onStepChange?.("build");
+                  }}
                   className="w-full bg-gradient-to-r from-orange-500 to-amber-500 text-white hover:brightness-110"
                 >
                   Continue to Build Payload
@@ -315,6 +320,13 @@ export function PayloadForm({ onPayloadReady }: PayloadFormProps) {
                 </p>
               )}
             </div>
+
+              {buildError && (
+                <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive font-semibold">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{buildError}</span>
+                </div>
+              )}
 
             <Button
               onClick={handleBuildPayload}
