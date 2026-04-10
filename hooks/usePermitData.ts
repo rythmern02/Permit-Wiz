@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useState, useRef } from "react";
 import { usePublicClient, useChainId } from "wagmi";
 import type { Address } from "viem";
 import { hexToString } from "viem";
@@ -31,8 +31,33 @@ export interface UsePermitDataReturn {
 
 const LOG_PREFIX = "[PermitWiz]";
 
-// Simple module-level cache
-const tokenDataCache = new Map<string, { td: TokenData, warnings: string[], domain: PermitDomain }>();
+/** Cache TTL in milliseconds (5 minutes). */
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+interface CacheEntry {
+  td: TokenData;
+  warnings: string[];
+  domain: PermitDomain;
+  /** Unix epoch ms when this entry was stored. */
+  storedAt: number;
+}
+
+// Module-level cache with TTL.
+const tokenDataCache = new Map<string, CacheEntry>();
+
+/**
+ * Returns a cached entry only if it is still fresh (within TTL).
+ * Stale entries are deleted on access.
+ */
+function getCacheEntry(key: string): CacheEntry | null {
+  const entry = tokenDataCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.storedAt > CACHE_TTL_MS) {
+    tokenDataCache.delete(key);
+    return null;
+  }
+  return entry;
+}
 
 /**
  * Decode a bytes32 value to a UTF-8 string (strips null bytes).
@@ -82,7 +107,6 @@ async function tryReadWithFallback<T>(
     if (process.env.NODE_ENV !== "production") {
       console.warn(
         `${LOG_PREFIX} ⚠️ Primary ${fieldName}() call failed, trying fallbacks...`,
-        primaryErr,
       );
     }
   }
@@ -119,13 +143,17 @@ export function usePermitData(
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
 
-  // to guard against race conditions
-  const [runId, setRunId] = useState(0);
+  /**
+   * Race-condition guard using useRef so that reading/writing the current run
+   * ID is safe in React Strict Mode and concurrent rendering, where state
+   * updater functions may be called multiple times.
+   */
+  const runIdRef = useRef(0);
 
   const fetchTokenData = useCallback(async () => {
     if (!tokenAddress || !ownerAddress || !publicClient) {
       if (process.env.NODE_ENV !== "production") {
-        console.error(
+        console.warn(
           `${LOG_PREFIX} ❌ Cannot fetch: missing address or client`,
           {
             tokenAddress,
@@ -143,12 +171,14 @@ export function usePermitData(
     setTokenData(null);
     setDomain(null);
 
-    const currentRunId = Date.now();
-    setRunId(currentRunId);
+    // Capture the run ID for this invocation.
+    const currentRunId = ++runIdRef.current;
 
     const cacheKey = `${chainId}-${tokenAddress.toLowerCase()}-${ownerAddress.toLowerCase()}`;
-    if (tokenDataCache.has(cacheKey)) {
-      const cached = tokenDataCache.get(cacheKey)!;
+    const cached = getCacheEntry(cacheKey);
+    if (cached) {
+      // Guard: ensure no newer fetch has started since the cache lookup.
+      if (runIdRef.current !== currentRunId) return;
       setTokenData(cached.td);
       setDomain(cached.domain);
       setWarnings(cached.warnings);
@@ -172,7 +202,7 @@ export function usePermitData(
         decimalsResult,
         nonceResult,
         versionResult,
-        code
+        code,
       ] = await Promise.all([
         tryReadWithFallback<string>(
           publicClient,
@@ -180,10 +210,10 @@ export function usePermitData(
           { functionName: "name", abi: IERC20PermitABI },
           [
             {
-               functionName: "name",
-               abi: ERC20Bytes32ABI,
-               transform: (v) => decodeBytes32String(v as `0x${string}`),
-               label: "Token returns bytes32 for name() — decoded successfully.",
+              functionName: "name",
+              abi: ERC20Bytes32ABI,
+              transform: (v) => decodeBytes32String(v as `0x${string}`),
+              label: "Token returns bytes32 for name() — decoded successfully.",
             },
           ],
           "name",
@@ -194,10 +224,11 @@ export function usePermitData(
           { functionName: "symbol", abi: IERC20PermitABI },
           [
             {
-               functionName: "symbol",
-               abi: ERC20Bytes32ABI,
-               transform: (v) => decodeBytes32String(v as `0x${string}`),
-               label: "Token returns bytes32 for symbol() — decoded successfully.",
+              functionName: "symbol",
+              abi: ERC20Bytes32ABI,
+              transform: (v) => decodeBytes32String(v as `0x${string}`),
+              label:
+                "Token returns bytes32 for symbol() — decoded successfully.",
             },
           ],
           "symbol",
@@ -212,20 +243,24 @@ export function usePermitData(
         tryReadWithFallback<bigint>(
           publicClient,
           tokenAddress,
-          { functionName: "nonces", abi: IERC20PermitABI, args: [ownerAddress] },
+          {
+            functionName: "nonces",
+            abi: IERC20PermitABI,
+            args: [ownerAddress],
+          },
           [
-             {
-               functionName: "_nonces",
-               abi: NonceAlternativesABI,
-               args: [ownerAddress],
-               label: "Token uses _nonces() instead of nonces().",
-             },
-             {
-               functionName: "getNonce",
-               abi: NonceAlternativesABI,
-               args: [ownerAddress],
-               label: "Token uses getNonce() instead of nonces().",
-             },
+            {
+              functionName: "_nonces",
+              abi: NonceAlternativesABI,
+              args: [ownerAddress],
+              label: "Token uses _nonces() instead of nonces().",
+            },
+            {
+              functionName: "getNonce",
+              abi: NonceAlternativesABI,
+              args: [ownerAddress],
+              label: "Token uses getNonce() instead of nonces().",
+            },
           ],
           "nonces",
         ),
@@ -236,44 +271,55 @@ export function usePermitData(
           [],
           "version",
         ),
-        publicClient.getCode({ address: tokenAddress })
+        publicClient.getCode({ address: tokenAddress }),
       ]);
 
-      setRunId((latestRunId) => {
-        if (latestRunId !== currentRunId) return latestRunId;
+      // Bail out if a newer fetch has superseded this one.
+      if (runIdRef.current !== currentRunId) return;
 
-        (async () => {
-          if (!code || code === "0x") {
-            const msg =
-              "No contract found at this address. Please verify the address and the connected network.";
-            console.error(`${LOG_PREFIX} ❌ ${msg}`, {
-              address: tokenAddress,
-              chainId,
-            });
-            setError(msg);
-            setIsLoading(false);
-            return;
-          }
-          console.log(
-            `${LOG_PREFIX} ✓ Contract exists at ${tokenAddress} (${code.length} bytes of code)`,
+      if (!code || code === "0x") {
+        const msg =
+          "No contract found at this address. Please verify the address and the connected network.";
+        if (process.env.NODE_ENV !== "production") {
+          console.warn(`${LOG_PREFIX} ❌ ${msg}`, {
+            address: tokenAddress,
+            chainId,
+          });
+        }
+        setError(msg);
+        setIsLoading(false);
+        return;
+      }
+
+      if (process.env.NODE_ENV !== "production") {
+        console.log(
+          `${LOG_PREFIX} ✓ Contract exists at ${tokenAddress} (${code.length} bytes of code)`,
+        );
+      }
+
+      let hasDomainSeparator = false;
+      let contractDomainSeparator: string | null = null;
+      try {
+        const returnedDs = await publicClient.readContract({
+          address: tokenAddress,
+          abi: IERC20PermitABI,
+          functionName: "DOMAIN_SEPARATOR",
+        });
+        hasDomainSeparator = true;
+        contractDomainSeparator = returnedDs as string;
+        if (process.env.NODE_ENV !== "production") {
+          console.log(`${LOG_PREFIX} ✓ DOMAIN_SEPARATOR() exists`);
+        }
+      } catch {
+        if (process.env.NODE_ENV !== "production") {
+          console.warn(
+            `${LOG_PREFIX} ⚠️ DOMAIN_SEPARATOR() not found or reverted`,
           );
+        }
+      }
 
-          let hasDomainSeparator = false;
-          let contractDomainSeparator: string | null = null;
-          try {
-            const returnedDs = await publicClient.readContract({
-              address: tokenAddress,
-              abi: IERC20PermitABI,
-              functionName: "DOMAIN_SEPARATOR",
-            });
-            hasDomainSeparator = true;
-            contractDomainSeparator = returnedDs as string;
-            console.log(`${LOG_PREFIX} ✓ DOMAIN_SEPARATOR() exists`);
-          } catch {
-            console.warn(
-              `${LOG_PREFIX} ⚠️ DOMAIN_SEPARATOR() not found or reverted`,
-            );
-          }
+      // Bail out again after the second async block.
+      if (runIdRef.current !== currentRunId) return;
 
       // --- Evaluate results ---
 
@@ -283,10 +329,12 @@ export function usePermitData(
           "This contract's view functions are reverting. " +
           "It may be an uninitialized proxy, a paused contract, or not ERC-20 compatible. " +
           "Try verifying on the block explorer that name() and symbol() are callable.";
-        console.error(`${LOG_PREFIX} ❌ ${msg}`, { address: tokenAddress });
+        if (process.env.NODE_ENV !== "production") {
+          console.warn(`${LOG_PREFIX} ❌ ${msg}`, { address: tokenAddress });
+        }
         setError(msg);
         setIsLoading(false);
-        return latestRunId;
+        return;
       }
 
       // Name: use result or fallback
@@ -324,17 +372,19 @@ export function usePermitData(
         const msg =
           "Failed to read nonces(owner). This token likely does not support ERC-2612 permit. " +
           "The contract must implement a nonces() function for permit to work.";
-        console.error(`${LOG_PREFIX} ❌ ${msg}`, { address: tokenAddress });
+        if (process.env.NODE_ENV !== "production") {
+          console.warn(`${LOG_PREFIX} ❌ ${msg}`, { address: tokenAddress });
+        }
         if (!hasDomainSeparator) {
           setError(
             msg +
-              " No DOMAIN_SEPARATOR() was found either, confirming this is not an ERC-2612 token.",
+            " No DOMAIN_SEPARATOR() was found either, confirming this is not an ERC-2612 token.",
           );
         } else {
           setError(msg);
         }
         setIsLoading(false);
-        return latestRunId;
+        return;
       }
       const nonce = nonceResult.value ?? BigInt(0);
       if (nonceResult.warning) {
@@ -368,7 +418,7 @@ export function usePermitData(
       setTokenData(td);
 
       const domainObj = buildDomain(name, version, chainId, tokenAddress);
-      
+
       if (hasDomainSeparator && contractDomainSeparator) {
         const computedDs = keccak256(
           encodeAbiParameters(
@@ -377,28 +427,41 @@ export function usePermitData(
               "bytes32",
               "bytes32",
               "uint256",
-              "address"
+              "address",
             ]),
             [
-              keccak256(new TextEncoder().encode("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)")),
+              keccak256(
+                new TextEncoder().encode(
+                  "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)",
+                ),
+              ),
               keccak256(new TextEncoder().encode(name)),
               keccak256(new TextEncoder().encode(version)),
               BigInt(chainId),
-              tokenAddress
-            ]
-          )
+              tokenAddress,
+            ],
+          ),
         );
-        if (computedDs.toLowerCase() !== contractDomainSeparator.toLowerCase()) {
-           newWarnings.push(
-             `DOMAIN_SEPARATOR mismatch! Computed: ${computedDs.substring(0, 10)}..., Contract: ${contractDomainSeparator.substring(0, 10)}... The version or name string may be incorrect.`
-           );
+        if (
+          computedDs.toLowerCase() !==
+          contractDomainSeparator.toLowerCase()
+        ) {
+          newWarnings.push(
+            `DOMAIN_SEPARATOR mismatch! Computed: ${computedDs.substring(0, 10)}..., Contract: ${contractDomainSeparator.substring(0, 10)}... The version or name string may be incorrect.`,
+          );
         }
       }
 
       setDomain(domainObj);
-
       setWarnings(newWarnings);
-      tokenDataCache.set(cacheKey, { td, warnings: newWarnings, domain: domainObj });
+
+      // Store in cache with current timestamp for TTL tracking.
+      tokenDataCache.set(cacheKey, {
+        td,
+        warnings: newWarnings,
+        domain: domainObj,
+        storedAt: Date.now(),
+      });
 
       if (process.env.NODE_ENV !== "production") {
         console.log(`${LOG_PREFIX} ✅ Token fetched successfully:`, {
@@ -414,15 +477,15 @@ export function usePermitData(
       }
 
       setIsLoading(false);
-     })();
-     return latestRunId;
-    });
     } catch (err) {
+      if (runIdRef.current !== currentRunId) return;
       const msg = err instanceof Error ? err.message : "Unknown error";
-      console.error(
-        `${LOG_PREFIX} ❌ Unexpected error during token fetch:`,
-        err,
-      );
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(
+          `${LOG_PREFIX} ❌ Unexpected error during token fetch:`,
+          err,
+        );
+      }
       setError(
         `Failed to read contract data: ${msg}. Check the address and ensure you're on the correct network.`,
       );

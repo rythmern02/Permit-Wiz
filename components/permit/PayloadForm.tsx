@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAccount } from "wagmi";
 import type { Address } from "viem";
 import { parseUnits, getAddress, isAddress } from "viem";
@@ -27,6 +27,7 @@ import {
   Info,
   Loader2,
 } from "lucide-react";
+import { toast } from "sonner";
 
 interface PayloadFormProps {
   onPayloadReady: (
@@ -61,6 +62,12 @@ export function PayloadForm({ onPayloadReady, onStepChange }: PayloadFormProps) 
     }
   };
 
+  useEffect(() => {
+    if (error) {
+      toast.error(error, { duration: 5000 });
+    }
+  }, [error]);
+
   const handleSetDeadline1Hour = () => {
     const ts = Math.floor(Date.now() / 1000) + 3600;
     setDeadline(ts.toString());
@@ -79,6 +86,15 @@ export function PayloadForm({ onPayloadReady, onStepChange }: PayloadFormProps) 
     try {
       const rawValue = parseUnits(value, tokenData.decimals);
       const dl = BigInt(deadline);
+
+      // Re-validate deadline at build time: the user may have idled between
+      // typing the timestamp and clicking Build, expiring the deadline.
+      if (dl <= BigInt(Math.floor(Date.now() / 1000))) {
+        setBuildError(
+          "Deadline is in the past. Please set a future deadline before building the permit.",
+        );
+        return;
+      }
 
       const message: PermitMessage = {
         owner: address,
@@ -152,13 +168,6 @@ export function PayloadForm({ onPayloadReady, onStepChange }: PayloadFormProps) 
             <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm text-amber-400">
               <AlertTriangle className="h-4 w-4 shrink-0" />
               Connect your wallet first to use as the permit owner.
-            </div>
-          )}
-
-          {error && (
-            <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>{error}</span>
             </div>
           )}
 
@@ -321,12 +330,12 @@ export function PayloadForm({ onPayloadReady, onStepChange }: PayloadFormProps) 
               )}
             </div>
 
-              {buildError && (
-                <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive font-semibold">
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                  <span>{buildError}</span>
-                </div>
-              )}
+            {buildError && (
+              <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive font-semibold">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{buildError}</span>
+              </div>
+            )}
 
             <Button
               onClick={handleBuildPayload}

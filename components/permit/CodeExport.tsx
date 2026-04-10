@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 
 const escapeComment = (str: string) => str.replace(/\n|\r/g, " ").replace(/\*\//g, "* /");
-const escapeString = (str: string) => str.replace(/['"`\\]/g, '\\$&').replace(/\n|\r/g, "");
+const escapeString = (str: string) => str.replace(/['"`$\\]/g, '\\$&').replace(/\n|\r/g, "");
 import type { Hex, Address } from "viem";
 import {
   Card,
@@ -166,7 +166,9 @@ const message = {
         timeoutRef.current = setTimeout(() => setCopiedTab(null), 2000);
       }
     } catch (err) {
-      console.error("Failed to copy code to clipboard", err);
+      if (process.env.NODE_ENV !== "production") {
+        console.error("Failed to copy code to clipboard", err);
+      }
     }
   };
 
@@ -239,25 +241,28 @@ const message = {
 function CopyButton({
   onClick,
   copied,
+  label = "Copy code to clipboard",
 }: {
   onClick: () => void;
   copied: boolean;
+  label?: string;
 }) {
   return (
     <Button
       variant="ghost"
       size="sm"
       onClick={onClick}
+      aria-label={copied ? "Code copied" : label}
       className="h-auto px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
     >
       {copied ? (
         <>
-          <CheckCircle2 className="mr-1 h-3 w-3 text-emerald-400" />
+          <CheckCircle2 className="mr-1 h-3 w-3 text-emerald-400" aria-hidden="true" />
           Copied!
         </>
       ) : (
         <>
-          <Copy className="mr-1 h-3 w-3" />
+          <Copy className="mr-1 h-3 w-3" aria-hidden="true" />
           Copy
         </>
       )}

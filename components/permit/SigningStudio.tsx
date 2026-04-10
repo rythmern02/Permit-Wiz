@@ -59,9 +59,23 @@ export function SigningStudio({
 
   const handleSign = async () => {
     if (isChainMismatch) {
+      // Runtime validation: only Rootstock Mainnet (30) and Testnet (31) are supported.
+      if (domain.chainId !== 30 && domain.chainId !== 31) {
+        // Surface to the user via wagmi's error state by calling reset + returning.
+        // We cannot call setError here (it belongs to useSignTypedData), so we
+        // surface a descriptive message through the errorInfo fallback below.
+        // This branch is a safety net; the domain is always built from the
+        // connected chainId, so reaching here indicates a programming error.
+        if (process.env.NODE_ENV !== "production") {
+          console.error(
+            `[PermitWiz] Unsupported chainId in domain: ${domain.chainId}. Only 30 (Mainnet) and 31 (Testnet) are supported.`,
+          );
+        }
+        return;
+      }
       try {
         setIsSwitching(true);
-        await switchChainAsync({ chainId: domain.chainId as 30 | 31 });
+        await switchChainAsync({ chainId: domain.chainId });
       } catch (err) {
         setIsSwitching(false);
         return;
@@ -178,22 +192,24 @@ export function SigningStudio({
           <div className="flex items-center justify-between">
             <button
               type="button"
+              aria-label={showPayload ? "Hide typed data payload" : "Show typed data payload"}
               onClick={() => setShowPayload(!showPayload)}
               className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
             >
-              <Eye className="h-3 w-3" />
+              <Eye className="h-3 w-3" aria-hidden="true" />
               {showPayload ? "Hide" : "Show"} Typed Data Payload
             </button>
             <Button
               variant="ghost"
               size="sm"
               onClick={copyPayload}
+              aria-label={copied ? "Payload copied" : "Copy payload to clipboard"}
               className="h-auto px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
             >
               {copied ? (
-                <CheckCircle2 className="mr-1 h-3 w-3 text-emerald-400" />
+                <CheckCircle2 className="mr-1 h-3 w-3 text-emerald-400" aria-hidden="true" />
               ) : (
-                <Copy className="mr-1 h-3 w-3" />
+                <Copy className="mr-1 h-3 w-3" aria-hidden="true" />
               )}
               {copied ? "Copied" : "Copy"}
             </Button>

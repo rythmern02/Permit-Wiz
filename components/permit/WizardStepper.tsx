@@ -39,6 +39,8 @@ export function WizardStepper({
               type="button"
               onClick={() => isClickable && onStepClick(step.id)}
               disabled={!isClickable}
+              aria-current={isActive ? "step" : undefined}
+              aria-label={`Step ${step.id}: ${step.title} — ${step.description}${isCompleted ? " (completed)" : isActive ? " (current)" : ""}`}
               className={cn(
                 "group flex flex-col items-center gap-1.5 transition-all duration-300",
                 isClickable && "cursor-pointer",
