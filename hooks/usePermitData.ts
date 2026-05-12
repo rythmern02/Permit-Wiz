@@ -10,7 +10,17 @@ import {
   NonceAlternativesABI,
 } from "@/abis/IERC20Permit";
 import { buildDomain, type PermitDomain } from "@/lib/eip712";
-import { keccak256, encodeAbiParameters, parseAbiParameters } from "viem";
+import {
+  buildCacheKey,
+  getCacheEntry,
+  setCacheEntry,
+} from "@/lib/tokenCache";
+import {
+  keccak256,
+  encodeAbiParameters,
+  parseAbiParameters,
+  type Abi,
+} from "viem";
 
 export interface TokenData {
   name: string;
@@ -30,34 +40,6 @@ export interface UsePermitDataReturn {
 }
 
 const LOG_PREFIX = "[PermitWiz]";
-
-/** Cache TTL in milliseconds (5 minutes). */
-const CACHE_TTL_MS = 5 * 60 * 1000;
-
-interface CacheEntry {
-  td: TokenData;
-  warnings: string[];
-  domain: PermitDomain;
-  /** Unix epoch ms when this entry was stored. */
-  storedAt: number;
-}
-
-// Module-level cache with TTL.
-const tokenDataCache = new Map<string, CacheEntry>();
-
-/**
- * Returns a cached entry only if it is still fresh (within TTL).
- * Stale entries are deleted on access.
- */
-function getCacheEntry(key: string): CacheEntry | null {
-  const entry = tokenDataCache.get(key);
-  if (!entry) return null;
-  if (Date.now() - entry.storedAt > CACHE_TTL_MS) {
-    tokenDataCache.delete(key);
-    return null;
-  }
-  return entry;
-}
 
 /**
  * Decode a bytes32 value to a UTF-8 string (strips null bytes).
@@ -80,12 +62,12 @@ async function tryReadWithFallback<T>(
   address: Address,
   primary: {
     functionName: string;
-    abi: any;
+    abi: Abi;
     args?: readonly unknown[];
   },
   fallbacks: Array<{
     functionName: string;
-    abi: any;
+    abi: Abi;
     args?: readonly unknown[];
     transform?: (v: unknown) => T;
     label: string;
@@ -100,10 +82,10 @@ async function tryReadWithFallback<T>(
       address,
       abi: primary.abi,
       functionName: primary.functionName,
-      args: primary.args,
+      args: primary.args as readonly unknown[] | undefined,
     });
     return { value: result as T, warning: null, failed: false };
-  } catch (primaryErr) {
+  } catch {
     if (process.env.NODE_ENV !== "production") {
       console.warn(
         `${LOG_PREFIX} ⚠️ Primary ${fieldName}() call failed, trying fallbacks...`,
@@ -118,7 +100,7 @@ async function tryReadWithFallback<T>(
         address,
         abi: fb.abi,
         functionName: fb.functionName,
-        args: fb.args,
+        args: fb.args as readonly unknown[] | undefined,
       });
       const value = fb.transform ? fb.transform(result) : (result as T);
       return { value, warning: fb.label, failed: false };
@@ -174,7 +156,7 @@ export function usePermitData(
     // Capture the run ID for this invocation.
     const currentRunId = ++runIdRef.current;
 
-    const cacheKey = `${chainId}-${tokenAddress.toLowerCase()}-${ownerAddress.toLowerCase()}`;
+    const cacheKey = buildCacheKey(chainId, tokenAddress, ownerAddress);
     const cached = getCacheEntry(cacheKey);
     if (cached) {
       // Guard: ensure no newer fetch has started since the cache lookup.
@@ -456,7 +438,7 @@ export function usePermitData(
       setWarnings(newWarnings);
 
       // Store in cache with current timestamp for TTL tracking.
-      tokenDataCache.set(cacheKey, {
+      setCacheEntry(cacheKey, {
         td,
         warnings: newWarnings,
         domain: domainObj,

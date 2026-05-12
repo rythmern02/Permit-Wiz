@@ -28,7 +28,13 @@ export const permitFormSchema = z.object({
     .refine((val) => {
       const num = parseInt(val, 10);
       return !isNaN(num) && num > 0;
-    }, "Deadline must be a valid Unix timestamp"),
+    }, "Deadline must be a valid Unix timestamp")
+    // Defense-in-depth: any code path that builds a payload (not just the form)
+    // gets a schema-level guarantee that the deadline is not already expired.
+    .refine(
+      (val) => Number(val) > Math.floor(Date.now() / 1000),
+      "Deadline must be in the future",
+    ),
 });
 
 export type TokenAddressInput = z.infer<typeof tokenAddressSchema>;

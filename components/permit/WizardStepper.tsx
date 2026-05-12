@@ -59,12 +59,15 @@ export function WizardStepper({
                 )}
               >
                 {isCompleted ? (
-                  <Check className="h-5 w-5" />
+                  <Check className="h-5 w-5" aria-hidden="true" />
                 ) : (
-                  <span>{step.id}</span>
+                  <span aria-hidden="true">{step.id}</span>
                 )}
                 {isActive && (
-                  <span className="absolute -inset-1 animate-ping rounded-full border border-orange-500/30" />
+                  <span
+                    aria-hidden="true"
+                    className="absolute -inset-1 animate-ping rounded-full border border-orange-500/30"
+                  />
                 )}
               </div>
               <div className="text-center">

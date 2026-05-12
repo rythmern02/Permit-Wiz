@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect, useRef } from "react";
-import { useSignTypedData, useAccount, useSwitchChain, useConfig } from "wagmi";
+import { useSignTypedData, useAccount, useSwitchChain } from "wagmi";
 import type { Hex } from "viem";
 import {
   Card,
@@ -76,7 +76,7 @@ export function SigningStudio({
       try {
         setIsSwitching(true);
         await switchChainAsync({ chainId: domain.chainId });
-      } catch (err) {
+      } catch {
         setIsSwitching(false);
         return;
       }
@@ -224,6 +224,8 @@ export function SigningStudio({
         {/* Error Display */}
         {errorInfo && (
           <div
+            role="alert"
+            aria-live={errorInfo.type === "warning" ? "polite" : "assertive"}
             className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-sm ${
               errorInfo.type === "warning"
                 ? "border-amber-500/30 bg-amber-500/5 text-amber-400"
@@ -231,9 +233,9 @@ export function SigningStudio({
             }`}
           >
             {errorInfo.type === "warning" ? (
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
             ) : (
-              <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <XCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
             )}
             <span>{errorInfo.text}</span>
           </div>

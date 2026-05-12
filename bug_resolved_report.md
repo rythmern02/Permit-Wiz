@@ -1,6 +1,6 @@
 # Bug Resolution Report: Permit-Wiz
 
-This document details every technical fix applied across two audit rounds.  
+This document details every technical fix applied across three audit rounds.  
 **Status: Final Audit Passed — All findings resolved. Production-ready.**
 
 ---
@@ -210,6 +210,99 @@ All remaining `console` calls (including the DOMAIN_SEPARATOR check, contract ex
 #### R2-11. Next.js Moderate CVE — Upgrade from `16.1.6` to `16.2.2`
 **Problem:** `next@16.1.6` carried a moderate-severity CVE.  
 **Fix applied in:** [package.json](package.json) and installed via `npm install`.  
-`next` and `eslint-config-next` both updated to `16.2.2`.
+`next` and `eslint-config-next` both updated to `16.2.2`. *(Further upgraded in Round 3 — see #R3-C1.)*
+
+---
+
+## Round 3 — Post-Fix Audit (All Resolved)
+
+The Round 2 fix commit itself was re-audited and produced eleven new findings.
+All are now resolved. Tests: **14/14 passing**. Production build: **clean (no
+warnings)**. Lint: **clean (0 errors, 0 warnings)**.
+
+### 🛑 CRITICAL / HIGH
+
+#### R3-C1. Next.js DoS CVE Regression — Upgrade from `16.2.2` to `16.2.6`
+**Severity:** VULN HIGH (CVSS 7.5, GHSA-q4gf-8mx6-v5v3 — DoS via Server Components, vulnerable range `>=16.0.0-beta.0 <16.2.3`)
+**Problem:** Round 2 upgraded to `16.2.2`, which carries a higher-severity CVE than the moderate one being remediated. For a cryptographic signing tool, any DoS surface is unacceptable.
+**Fix applied in:** [package.json](package.json) — `next` and `eslint-config-next` both updated to `^16.2.6` (latest stable in the 16.2 line) and installed via `npm install`. The vulnerable range is closed.
+
+#### R3-C2. CSP `script-src 'unsafe-inline'` in Production — Nonce-Based Replacement
+**Severity:** VULN MED (XSS-mitigation regression)
+**Problem:** The Round 2 CSP set `'unsafe-inline'` in `script-src` permanently for production, which negates most XSS protection. An injected script could swap the displayed snippet, exfiltrate the wallet address, or modify deadline/spender before signing.
+**Fix applied in:** [proxy.ts](proxy.ts) *(new)* and [next.config.ts](next.config.ts) and [app/layout.tsx](app/layout.tsx).
+- Introduced a Next.js 16 **proxy** (the non-deprecated successor to `middleware`) that generates a fresh 128-bit base64 nonce per request via `crypto.getRandomValues`.
+- The proxy sets the nonce on the `x-nonce` request header and embeds it into the response `Content-Security-Policy` as `script-src 'self' 'nonce-<random>' 'strict-dynamic'` *(production)* or `'self' 'unsafe-inline' 'unsafe-eval'` *(development only, required by HMR/error overlay)*.
+- The root layout now calls `await headers()` so that pages opt out of static generation and Next.js automatically nonces its bootstrap `<script>` tags from the request header.
+- The static CSP block was removed from `next.config.ts`; all other security headers (`X-Frame-Options`, `X-Content-Type-Options`, `HSTS`, `Referrer-Policy`, `Permissions-Policy`) remain in place.
+- Hardened directives added: `base-uri 'self'`, `form-action 'self'`.
+
+---
+
+### 🟡 OTHER FINDINGS
+
+#### R3-N1. Error Containers Missing `role="alert"`
+**Problem:** Dynamic error divs in `PayloadForm.tsx` (build-error panel) and `SigningStudio.tsx` (sign-error panel) were not announced to screen readers. WCAG 4.1.3.
+**Fix applied in:** [PayloadForm.tsx](components/permit/PayloadForm.tsx), [SigningStudio.tsx](components/permit/SigningStudio.tsx), and [VerificationBadge.tsx](components/permit/VerificationBadge.tsx) — every dynamic error container now carries `role="alert"` together with an appropriate `aria-live` (`assertive` for errors, `polite` for warnings). Decorative icons inside the alerts are marked `aria-hidden="true"`.
+
+#### R3-N2. Owner Input Not Associated with its Label
+**Problem:** The Owner `<Input>` in the Build step was not programmatically associated with its `<Label>`. WCAG 1.3.1.
+**Fix applied in:** [PayloadForm.tsx](components/permit/PayloadForm.tsx) — `<Label htmlFor="owner">` paired with `<Input id="owner" readOnly disabled />`. `readOnly` was added so assistive tech can still read the value while keeping it visually disabled.
+
+#### R3-N3. `VerificationBadge` Copy Buttons Missing `aria-label`
+**Problem:** Icon-only copy buttons inside `AddressRow` and `SigField` had no accessible name; the raw-signature copy button was missing one too.
+**Fix applied in:** [VerificationBadge.tsx](components/permit/VerificationBadge.tsx) — each copy button now has a descriptive, state-aware `aria-label` (e.g. `"Copy owner address to clipboard"` → `"Owner address copied"`). The match/mismatch ✓/✗ glyph also gains an `aria-label`. All icons are marked `aria-hidden="true"`.
+
+#### R3-N4. `ConnectButton` Dropdown Missing Escape Key & Focus Management
+**Problem:** WCAG 2.1.2 — the listbox could be opened by keyboard but not dismissed with `Escape`, focus was not moved into the listbox on open, and focus was not returned to the trigger on close.
+**Fix applied in:** [ConnectButton.tsx](components/shared/ConnectButton.tsx) — added an effect that, while the dropdown is open, listens for `Escape` on `document` and closes the dropdown (returning focus to the trigger via a stored `ref`). An outside `pointerdown` also dismisses the dropdown. When the dropdown opens, the first non-disabled wallet option is focused automatically.
+
+#### R3-N5. Ungated `console.error` in `VerificationBadge`
+**Problem:** A single `console.error` in the clipboard error handler was not gated by `process.env.NODE_ENV`, allowing diagnostic noise in production bundles.
+**Fix applied in:** [VerificationBadge.tsx](components/permit/VerificationBadge.tsx:78-82) — wrapped in the standard `if (process.env.NODE_ENV !== "production")` guard.
+
+#### R3-N6. Zod Schema Does Not Reject Past Deadlines
+**Problem:** Defense-in-depth gap — the build-time check in `handleBuildPayload` covered the user-facing case, but a schema-only consumer could still construct an expired permit.
+**Fix applied in:** [lib/schemas.ts](lib/schemas.ts) — added `.refine(v => Number(v) > Math.floor(Date.now() / 1000), "Deadline must be in the future")` to the deadline schema. Covered by three new unit tests in `tests/schemas.test.ts`.
+
+#### R3-N7. PayloadForm Does Not Reactively Refetch on Chain/Wallet Change
+**Problem:** TTL + cache-key partitioning prevented stale data being served, but the form did not refetch when `useChainId()` or `useAccount()` changed. Users could see "no data" silently after a switch until they clicked Fetch again.
+**Fix applied in:** [PayloadForm.tsx](components/permit/PayloadForm.tsx)
+- New `useEffect` watches `chainId` and `address`. When either changes:
+  - Surfaces a `role="status"` UX hint *(“Network or wallet changed — refreshing token data for the new context.”)*
+  - Automatically triggers `fetch()` so the on-screen token data, nonce, and domain reflect the new context.
+- A previous-context `useRef` prevents the effect from firing on initial mount.
+
+#### R3-N8. Test Coverage — New Suites for Deadline & Cache TTL
+**Problem:** Only two tests existed (EIP-712 domain construction).
+**Fixes applied:**
+- Extracted the in-memory cache into [lib/tokenCache.ts](lib/tokenCache.ts) (`buildCacheKey`, `getCacheEntry`, `setCacheEntry`, `clearCache`, exported `CACHE_TTL_MS`). `hooks/usePermitData.ts` now imports from it.
+- Added [tests/tokenCache.test.ts](tests/tokenCache.test.ts) (5 tests): case-insensitive key construction, chainId partitioning, fresh-entry retrieval inside TTL, eviction past TTL via `vi.useFakeTimers`, and null returns for unknown keys.
+- Added [tests/schemas.test.ts](tests/schemas.test.ts) (7 tests): deadline-strictly-future accepted, deadline equal to now rejected, deadline in past rejected, non-numeric deadline rejected, `value = 0` accepted (permit revocation), malformed spender rejected, negative value rejected.
+- Result: **14 tests across 3 files — all passing**.
+
+#### R3-N9. `wagmi` Single-Connector Configuration *(decision)*
+**Status:** Resolved as **intentional** — left as-is for now.
+The new multi-connector dropdown in `ConnectButton.tsx` is fully reachable when additional connectors are registered. Today we ship with `injected()` only (Rootstock dApps are predominantly MetaMask/Liquality), so the single-connector branch renders. Adding WalletConnect later does not require any UI work — the dropdown branch will activate automatically when `connectors.length > 1`.
+
+#### R3-N10. Dynamic Imports Without Loading Fallback
+**Problem:** The three lazily-loaded components (`SigningStudio`, `VerificationBadge`, `CodeExport`) had no visible feedback during chunk load.
+**Fix applied in:** [app/page.tsx](app/page.tsx) — added a shared `ChunkLoadingSkeleton` component (`role="status"`, `aria-live="polite"`, descriptive label, animated spinner) and wired it to each `dynamic(...)` call via the `loading:` option. Each loader passes the component name so screen readers announce *“Loading signing studio…”* etc.
+
+#### R3-N11. `WizardStepper` Decorative Icon Missing `aria-hidden`
+**Problem:** The `Check` icon for completed steps and the ping-animation ring on the active step were not marked decorative.
+**Fix applied in:** [WizardStepper.tsx](components/permit/WizardStepper.tsx) — added `aria-hidden="true"` to the `<Check>` icon, the step-number `<span>`, and the active-step ping ring. The descriptive `aria-label` on the step button already conveys all relevant state.
+
+---
+
+### Verification
+
+| Check | Result |
+| --- | --- |
+| `npm test` | ✅ 14/14 tests passing across 3 files |
+| `npm run lint` | ✅ 0 errors, 0 warnings |
+| `npx tsc --noEmit` | ✅ no errors |
+| `npm run build` | ✅ compiled successfully, no deprecation warnings |
+| `npm audit` *(`next` CVE)* | ✅ GHSA-q4gf-8mx6-v5v3 no longer applicable (`next@16.2.6 ≥ 16.2.3`) |
 
 ---

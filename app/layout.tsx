@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+import { headers } from "next/headers";
 import { Providers } from "@/components/providers";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
@@ -24,11 +25,17 @@ export const metadata: Metadata = {
   ],
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Reading the request headers opts the page out of static generation so the
+  // middleware-issued `x-nonce` is available. Next.js automatically forwards
+  // the nonce to any built-in <script> tags it renders, eliminating the need
+  // for `'unsafe-inline'` in the production CSP `script-src`.
+  await headers();
+
   return (
     <html lang="en" className="dark" suppressHydrationWarning>
       <body className={`${inter.variable} font-sans antialiased`}>

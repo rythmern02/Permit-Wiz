@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useAccount, useConnect, useDisconnect, useChainId } from "wagmi";
 import { Button } from "@/components/ui/button";
 import { CHAIN_NAMES } from "@/lib/constants";
@@ -12,6 +12,50 @@ export function ConnectButton() {
   const { disconnect } = useDisconnect();
   const chainId = useChainId();
   const [showConnectors, setShowConnectors] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const listboxRef = useRef<HTMLDivElement | null>(null);
+
+  const closeDropdown = useCallback(() => {
+    setShowConnectors(false);
+    // Return focus to the trigger so keyboard users land somewhere predictable.
+    triggerRef.current?.focus();
+  }, []);
+
+  // Escape closes the dropdown; outside-click dismisses it without forcing focus.
+  useEffect(() => {
+    if (!showConnectors) return;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        closeDropdown();
+      }
+    };
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as Node | null;
+      if (!target) return;
+      if (listboxRef.current?.contains(target)) return;
+      if (triggerRef.current?.contains(target)) return;
+      setShowConnectors(false);
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [showConnectors, closeDropdown]);
+
+  // When the dropdown opens, focus the first selectable wallet option for
+  // keyboard users.
+  useEffect(() => {
+    if (!showConnectors) return;
+    const first = listboxRef.current?.querySelector<HTMLButtonElement>(
+      '[role="option"]:not([disabled])',
+    );
+    first?.focus();
+  }, [showConnectors]);
 
   if (isConnected && address) {
     const chainName = CHAIN_NAMES[chainId] ?? `Chain ${chainId}`;
@@ -70,6 +114,7 @@ export function ConnectButton() {
   return (
     <div className="relative">
       <Button
+        ref={triggerRef}
         onClick={() => setShowConnectors((v) => !v)}
         disabled={isPending}
         aria-haspopup="listbox"
@@ -89,8 +134,10 @@ export function ConnectButton() {
 
       {showConnectors && (
         <div
+          ref={listboxRef}
           role="listbox"
           aria-label="Available wallets"
+          tabIndex={-1}
           className="absolute right-0 top-full z-50 mt-2 min-w-[180px] rounded-lg border border-border/50 bg-card shadow-lg backdrop-blur-sm"
         >
           <div className="flex items-center justify-between border-b border-border/30 px-3 py-2">
@@ -99,7 +146,7 @@ export function ConnectButton() {
             </span>
             <button
               type="button"
-              onClick={() => setShowConnectors(false)}
+              onClick={closeDropdown}
               aria-label="Close wallet picker"
               className="text-muted-foreground hover:text-foreground"
             >
@@ -121,7 +168,7 @@ export function ConnectButton() {
                   connect({ connector });
                   setShowConnectors(false);
                 }}
-                className="flex w-full items-center gap-2 px-3 py-2.5 text-sm transition-colors hover:bg-muted/30 disabled:opacity-60"
+                className="flex w-full items-center gap-2 px-3 py-2.5 text-sm transition-colors hover:bg-muted/30 focus-visible:bg-muted/40 focus-visible:outline-none disabled:opacity-60"
               >
                 {isConnecting ? (
                   <Loader2

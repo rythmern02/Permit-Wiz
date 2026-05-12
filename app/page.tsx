@@ -12,19 +12,51 @@ import type { SplitSignature } from "@/hooks/useVerifyPermit";
 import type { TokenData } from "@/hooks/usePermitData";
 import { useCallback } from "react";
 
+function ChunkLoadingSkeleton({ label }: { label: string }) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      aria-label={`Loading ${label}`}
+      className="flex items-center justify-center rounded-2xl border border-border/30 bg-card/30 px-6 py-12 backdrop-blur-sm"
+    >
+      <span className="inline-flex items-center gap-3 text-sm text-muted-foreground">
+        <span
+          aria-hidden="true"
+          className="h-4 w-4 animate-spin rounded-full border-2 border-orange-400/40 border-t-orange-400"
+        />
+        Loading {label}…
+      </span>
+    </div>
+  );
+}
+
 const SigningStudio = dynamic(
-  () => import("@/components/permit/SigningStudio").then((mod) => mod.SigningStudio),
-  { ssr: false }
+  () =>
+    import("@/components/permit/SigningStudio").then((mod) => mod.SigningStudio),
+  {
+    ssr: false,
+    loading: () => <ChunkLoadingSkeleton label="signing studio" />,
+  },
 );
 
 const VerificationBadge = dynamic(
-  () => import("@/components/permit/VerificationBadge").then((mod) => mod.VerificationBadge),
-  { ssr: false }
+  () =>
+    import("@/components/permit/VerificationBadge").then(
+      (mod) => mod.VerificationBadge,
+    ),
+  {
+    ssr: false,
+    loading: () => <ChunkLoadingSkeleton label="verification badge" />,
+  },
 );
 
 const CodeExport = dynamic(
   () => import("@/components/permit/CodeExport").then((mod) => mod.CodeExport),
-  { ssr: false }
+  {
+    ssr: false,
+    loading: () => <ChunkLoadingSkeleton label="code export" />,
+  },
 );
 
 interface PermitState {

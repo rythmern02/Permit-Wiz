@@ -1,8 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useAccount } from "wagmi";
-import type { Address } from "viem";
+import { useState, useEffect, useRef } from "react";
+import { useAccount, useChainId } from "wagmi";
 import { parseUnits, getAddress, isAddress } from "viem";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -40,6 +39,7 @@ interface PayloadFormProps {
 
 export function PayloadForm({ onPayloadReady, onStepChange }: PayloadFormProps) {
   const { address } = useAccount();
+  const chainId = useChainId();
   const [tokenAddress, setTokenAddress] = useState("");
   const [step, setStep] = useState<"fetch" | "build">("fetch");
 
@@ -48,6 +48,7 @@ export function PayloadForm({ onPayloadReady, onStepChange }: PayloadFormProps) 
   const [value, setValue] = useState("");
   const [deadline, setDeadline] = useState("");
   const [buildError, setBuildError] = useState<string | null>(null);
+  const [contextChanged, setContextChanged] = useState(false);
 
   const validTokenAddr = isAddress(tokenAddress.trim(), { strict: false })
     ? getAddress(tokenAddress.trim())
@@ -58,6 +59,7 @@ export function PayloadForm({ onPayloadReady, onStepChange }: PayloadFormProps) 
 
   const handleFetch = () => {
     if (validTokenAddr && address) {
+      setContextChanged(false);
       fetch();
     }
   };
@@ -67,6 +69,29 @@ export function PayloadForm({ onPayloadReady, onStepChange }: PayloadFormProps) 
       toast.error(error, { duration: 5000 });
     }
   }, [error]);
+
+  // Re-fetch (or surface a UX hint) whenever the chain or connected wallet
+  // changes. We auto-refetch only if there's already fetched data for the
+  // current token, and only set the hint after the first context change.
+  const lastContextRef = useRef<{ chainId: number; address: string | undefined }>({
+    chainId,
+    address,
+  });
+  useEffect(() => {
+    const prev = lastContextRef.current;
+    const changed =
+      prev.chainId !== chainId || prev.address !== address;
+    if (!changed) return;
+    lastContextRef.current = { chainId, address };
+
+    if (validTokenAddr && address) {
+      setContextChanged(true);
+      // Auto-invalidate: trigger a fresh fetch so the user does not silently
+      // operate on stale data when they switch chains/wallets.
+      fetch();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chainId, address]);
 
   const handleSetDeadline1Hour = () => {
     const ts = Math.floor(Date.now() / 1000) + 3600;
@@ -166,8 +191,22 @@ export function PayloadForm({ onPayloadReady, onStepChange }: PayloadFormProps) 
 
           {!address && (
             <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm text-amber-400">
-              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
               Connect your wallet first to use as the permit owner.
+            </div>
+          )}
+
+          {contextChanged && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="flex items-start gap-2 rounded-lg border border-sky-500/30 bg-sky-500/5 px-3 py-2 text-sm text-sky-400"
+            >
+              <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>
+                Network or wallet changed — refreshing token data for the new
+                context.
+              </span>
             </div>
           )}
 
@@ -246,10 +285,12 @@ export function PayloadForm({ onPayloadReady, onStepChange }: PayloadFormProps) 
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <Label>Owner (your wallet)</Label>
+              <Label htmlFor="owner">Owner (your wallet)</Label>
               <Input
+                id="owner"
                 value={address ?? ""}
                 disabled
+                readOnly
                 className="font-mono text-sm opacity-60"
               />
             </div>
@@ -331,8 +372,12 @@ export function PayloadForm({ onPayloadReady, onStepChange }: PayloadFormProps) 
             </div>
 
             {buildError && (
-              <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive font-semibold">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div
+                role="alert"
+                aria-live="assertive"
+                className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive font-semibold"
+              >
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                 <span>{buildError}</span>
               </div>
             )}

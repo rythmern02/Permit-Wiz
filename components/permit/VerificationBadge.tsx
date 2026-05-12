@@ -76,7 +76,9 @@ export function VerificationBadge({
         timeoutRef.current = setTimeout(() => setCopiedField(null), 2000);
       }
     } catch (err) {
-      console.error("Failed to copy code to clipboard", err);
+      if (process.env.NODE_ENV !== "production") {
+        console.error("Failed to copy code to clipboard", err);
+      }
     }
   };
 
@@ -94,8 +96,12 @@ export function VerificationBadge({
   if (error) {
     return (
       <Card className="border-destructive/30 bg-destructive/5 backdrop-blur-sm">
-        <CardContent className="flex items-center gap-3 py-8">
-          <ShieldX className="h-8 w-8 text-destructive" />
+        <CardContent
+          role="alert"
+          aria-live="assertive"
+          className="flex items-center gap-3 py-8"
+        >
+          <ShieldX className="h-8 w-8 text-destructive" aria-hidden="true" />
           <div>
             <p className="font-medium text-destructive">Verification Failed</p>
             <p className="text-sm text-destructive/80">{error}</p>
@@ -215,12 +221,13 @@ export function VerificationBadge({
               variant="ghost"
               size="sm"
               onClick={() => copyToClipboard(signature, "sig")}
+              aria-label={copiedField === "sig" ? "Raw signature copied" : "Copy raw signature to clipboard"}
               className="h-auto px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
             >
               {copiedField === "sig" ? (
-                <CheckCircle2 className="mr-1 h-3 w-3 text-emerald-400" />
+                <CheckCircle2 className="mr-1 h-3 w-3 text-emerald-400" aria-hidden="true" />
               ) : (
-                <Copy className="mr-1 h-3 w-3" />
+                <Copy className="mr-1 h-3 w-3" aria-hidden="true" />
               )}
               {copiedField === "sig" ? "Copied" : "Copy"}
             </Button>
@@ -257,19 +264,23 @@ function AddressRow({
       </div>
       <div className="flex items-center gap-2">
         {isMatch !== undefined && (
-          <span className={isMatch ? "text-emerald-400" : "text-destructive"}>
+          <span
+            aria-label={isMatch ? "Address matches" : "Address does not match"}
+            className={isMatch ? "text-emerald-400" : "text-destructive"}
+          >
             {isMatch ? "✓" : "✗"}
           </span>
         )}
         <button
           type="button"
           onClick={onCopy}
+          aria-label={copied ? `${label} address copied` : `Copy ${label.toLowerCase()} address to clipboard`}
           className="text-muted-foreground hover:text-foreground transition-colors"
         >
           {copied ? (
-            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" aria-hidden="true" />
           ) : (
-            <Copy className="h-3.5 w-3.5" />
+            <Copy className="h-3.5 w-3.5" aria-hidden="true" />
           )}
         </button>
       </div>
@@ -301,12 +312,13 @@ function SigField({
       <button
         type="button"
         onClick={onCopy}
+        aria-label={copied ? `Signature component ${label} copied` : `Copy signature component ${label} to clipboard`}
         className="ml-2 shrink-0 text-muted-foreground hover:text-foreground transition-colors"
       >
         {copied ? (
-          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" aria-hidden="true" />
         ) : (
-          <Copy className="h-3.5 w-3.5" />
+          <Copy className="h-3.5 w-3.5" aria-hidden="true" />
         )}
       </button>
     </div>
